@@ -19,6 +19,7 @@ from logger import setup_logger
 from scanner.host_discovery import HostDiscovery
 from scanner.port_scanner import PortScanner, COMMON_PORTS
 from scanner.service_detection import ServiceDetector
+from scanner.vuln_detection import VulnerabilityDetector
 
 # ── Initialise colorama (required on Windows) ──────────────────────────
 colorama_init(autoreset=True)
@@ -37,7 +38,7 @@ BANNER = rf"""
    ╚═══╝   ╚═════╝ ╚══════╝╚═╝  ╚═══╝    ╚══════╝ ╚═════╝╚═╝  ╚═╝╚═╝  ╚═══╝
 {Style.RESET_ALL}
 {Fore.WHITE}  ─────────────────────────────────────────────────────────────────────
-{Fore.YELLOW}   Professional Modular Vulnerability Scanner  v1.0
+{Fore.YELLOW}   Professional Modular Vulnerability Scanner  v2.0
 {Fore.WHITE}  ─────────────────────────────────────────────────────────────────────
 """
 
@@ -136,6 +137,71 @@ def print_services(services: dict) -> None:
         )
 
 
+SEVERITY_COLORS = {
+    "CRITICAL": Fore.RED + Style.BRIGHT,
+    "HIGH": Fore.RED,
+    "MEDIUM": Fore.YELLOW,
+    "LOW": Fore.CYAN,
+    "INFO": Fore.WHITE,
+}
+
+
+def print_vulns(vulns: list) -> None:
+    """Display discovered vulnerabilities in a formatted table."""
+    print(
+        f"\n{Fore.RED}{Style.BRIGHT}"
+        f"  {'SEV':<10} {'PORT':<8} {'TITLE':<42} {'SOURCE'}"
+    )
+    print(f"  {'─'*10} {'─'*8} {'─'*42} {'─'*16}")
+    for v in vulns:
+        sev = v['severity'].upper()
+        color = SEVERITY_COLORS.get(sev, Fore.WHITE)
+        print(
+            f"  {color}{sev:<10} "
+            f"{Fore.WHITE}{v['port']:<8} "
+            f"{Fore.YELLOW}{v['title'][:40]:<42} "
+            f"{Fore.MAGENTA}{v['source']}"
+        )
+    # Detail lines
+    print(f"\n{Fore.WHITE}  ┌─ Vulnerability Details")
+    for i, v in enumerate(vulns, 1):
+        sev = v['severity'].upper()
+        color = SEVERITY_COLORS.get(sev, Fore.WHITE)
+        print(f"{Fore.WHITE}  │")
+        print(f"{Fore.WHITE}  ├─ [{color}{sev}{Fore.WHITE}] {Fore.YELLOW}{v['title']}")
+        print(f"{Fore.WHITE}  │   Port {v['port']} · {v['service']} · Source: {v['source']}")
+        desc_lines = v['description'][:160]
+        print(f"{Fore.WHITE}  │   {Fore.CYAN}{desc_lines}")
+    print(f"{Fore.WHITE}  └{'─'*64}")
+
+
+def print_risk_score(risk: dict) -> None:
+    """Display the aggregate risk score panel."""
+    # Color the rating
+    rating_colors = {
+        "Critical": Fore.RED + Style.BRIGHT,
+        "High": Fore.RED,
+        "Medium": Fore.YELLOW,
+        "Low": Fore.CYAN,
+        "Clean": Fore.GREEN + Style.BRIGHT,
+    }
+    rc = rating_colors.get(risk['rating'], Fore.WHITE)
+
+    print(f"\n{Fore.WHITE}  ┌{'─'*44}┐")
+    print(f"{Fore.WHITE}  │{Fore.RED}{Style.BRIGHT}  ⚠  RISK ASSESSMENT{' '*24}{Fore.WHITE}│")
+    print(f"{Fore.WHITE}  ├{'─'*44}┤")
+    print(f"{Fore.WHITE}  │  Overall Score : {rc}{risk['score']}/10{Style.RESET_ALL}{' '*(22 - len(str(risk['score'])))}│")
+    print(f"{Fore.WHITE}  │  Rating        : {rc}{risk['rating']}{Style.RESET_ALL}{' '*(24 - len(risk['rating']))}│")
+    print(f"{Fore.WHITE}  │  Total Findings: {Fore.YELLOW}{risk['total']}{Style.RESET_ALL}{' '*(24 - len(str(risk['total'])))}│")
+    print(f"{Fore.WHITE}  ├{'─'*44}┤")
+    print(f"{Fore.WHITE}  │  {Fore.RED}{Style.BRIGHT}CRITICAL : {risk['critical']}{Style.RESET_ALL}{' '*(31 - len(str(risk['critical'])))}│")
+    print(f"{Fore.WHITE}  │  {Fore.RED}HIGH     : {risk['high']}{Style.RESET_ALL}{' '*(31 - len(str(risk['high'])))}│")
+    print(f"{Fore.WHITE}  │  {Fore.YELLOW}MEDIUM   : {risk['medium']}{Style.RESET_ALL}{' '*(31 - len(str(risk['medium'])))}│")
+    print(f"{Fore.WHITE}  │  {Fore.CYAN}LOW      : {risk['low']}{Style.RESET_ALL}{' '*(31 - len(str(risk['low'])))}│")
+    print(f"{Fore.WHITE}  │  {Fore.WHITE}INFO     : {risk['info']}{Style.RESET_ALL}{' '*(31 - len(str(risk['info'])))}│")
+    print(f"{Fore.WHITE}  └{'─'*44}┘")
+
+
 # ══════════════════════════════════════════════════════════════════════ #
 #  Main workflow
 # ══════════════════════════════════════════════════════════════════════ #
@@ -201,6 +267,7 @@ def main() -> None:
         print(f"{Fore.RED}  [!] No open ports found in range {start_port}–{end_port}")
 
     # ── 4. Service Detection ──────────────────────────────────────────
+    services = {}
     if open_ports:
         print_section("SERVICE DETECTION (nmap -sV)")
         print(f"{Fore.WHITE}  [*] Identifying services on {len(open_ports)} port(s) …\n")
@@ -222,20 +289,61 @@ def main() -> None:
                 f"  (Is nmap installed?)"
             )
 
-    # ── 5. Summary ────────────────────────────────────────────────────
+    # ── 5. Vulnerability Detection ────────────────────────────────────
+    vulns = []
+    risk = {"total": 0, "critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0, "score": 0, "rating": "Clean"}
+    if open_ports:
+        print_section("VULNERABILITY DETECTION")
+        print(f"{Fore.WHITE}  [*] Running vulnerability engine …\n")
+
+        vd = VulnerabilityDetector()
+        vuln_start_time = time.time()
+        vulns = vd.run_all(target, open_ports, services)
+        vuln_elapsed = elapsed(vuln_start_time)
+
+        if vulns:
+            print_vulns(vulns)
+        else:
+            print(f"{Fore.GREEN}{Style.BRIGHT}  [✔] No vulnerabilities detected")
+
+        # Risk score
+        risk = VulnerabilityDetector.compute_risk_score(vulns)
+        print_risk_score(risk)
+
+        print(
+            f"\n{Fore.WHITE}  [*] Vulnerability scan completed in"
+            f" {Fore.YELLOW}{vuln_elapsed}"
+        )
+
+    # ── 6. Summary ────────────────────────────────────────────────────
     total_elapsed = elapsed(scan_start)
     print_section("SCAN SUMMARY")
-    print(f"{Fore.WHITE}  Target       : {Fore.GREEN}{target}")
-    print(f"{Fore.WHITE}  Host status  : {Fore.GREEN if host_alive else Fore.RED}{'UP' if host_alive else 'DOWN'}")
-    print(f"{Fore.WHITE}  Ports scanned: {Fore.YELLOW}{start_port}–{end_port}")
-    print(f"{Fore.WHITE}  Open ports   : {Fore.GREEN}{len(open_ports)}")
-    print(f"{Fore.WHITE}  Total time   : {Fore.YELLOW}{total_elapsed}")
+    print(f"{Fore.WHITE}  Target         : {Fore.GREEN}{target}")
+    print(f"{Fore.WHITE}  Host status    : {Fore.GREEN if host_alive else Fore.RED}{'UP' if host_alive else 'DOWN'}")
+    print(f"{Fore.WHITE}  Ports scanned  : {Fore.YELLOW}{start_port}–{end_port}")
+    print(f"{Fore.WHITE}  Open ports     : {Fore.GREEN}{len(open_ports)}")
+    print(f"{Fore.WHITE}  Vulnerabilities: {Fore.RED if risk['total'] > 0 else Fore.GREEN}{risk['total']}")
+
+    if risk['total'] > 0:
+        rating_colors = {
+            "Critical": Fore.RED + Style.BRIGHT,
+            "High": Fore.RED,
+            "Medium": Fore.YELLOW,
+            "Low": Fore.CYAN,
+            "Clean": Fore.GREEN + Style.BRIGHT,
+        }
+        rc = rating_colors.get(risk['rating'], Fore.WHITE)
+        print(f"{Fore.WHITE}  Risk rating    : {rc}{risk['rating']} ({risk['score']}/10){Style.RESET_ALL}")
+
+    print(f"{Fore.WHITE}  Total time     : {Fore.YELLOW}{total_elapsed}")
     print(DIVIDER)
 
     logger.info(
-        "=== Scan session finished – %s, %d open ports in %s ===",
+        "=== Scan session finished – %s, %d open ports, %d vulns, risk=%s in %s ===",
         target,
         len(open_ports),
+        risk['total'],
+        risk['rating'],
         total_elapsed,
     )
 
