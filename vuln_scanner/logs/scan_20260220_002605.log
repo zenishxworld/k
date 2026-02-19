@@ -1,0 +1,23 @@
+[2026-02-20 00:26:05] [DEBUG   ] vuln_scanner - Logger initialised – log file: C:\Users\zenis\Desktop\k\vuln_scanner\logs\scan_20260220_002605.log
+[2026-02-20 00:26:05] [INFO    ] vuln_scanner - === Scan session started ===
+[2026-02-20 00:26:18] [INFO    ] vuln_scanner - Target: 127.0.0.1
+[2026-02-20 00:26:19] [INFO    ] vuln_scanner - Host 127.0.0.1 is UP
+[2026-02-20 00:26:40] [INFO    ] vuln_scanner - Starting TCP connect scan on 127.0.0.1  ports 1–500 (500 ports, 100 threads, rate_limit=0.00s)
+[2026-02-20 00:26:41] [INFO    ] vuln_scanner -   ✔ Port 135/tcp OPEN  (MSRPC)
+[2026-02-20 00:26:44] [INFO    ] vuln_scanner -   ✔ Port 445/tcp OPEN  (SMB)
+[2026-02-20 00:26:45] [INFO    ] vuln_scanner - Port scan complete – 2 open port(s) found on 127.0.0.1
+[2026-02-20 00:26:45] [INFO    ] vuln_scanner - Port scan duration: 5.38s – 2 open ports
+[2026-02-20 00:26:45] [ERROR   ] vuln_scanner - nmap binary not found on PATH. Please install nmap: https://nmap.org/download.html  ('nmap program was not found in path. PATH is : C:\\Program Files\\PowerShell\\7;C:\\Windows\\system32;C:\\Windows;C:\\Windows\\System32\\Wbem;C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\;C:\\Windows\\System32\\OpenSSH\\;C:\\Program Files (x86)\\NVIDIA Corporation\\PhysX\\Common;C:\\Program Files\\NVIDIA Corporation\\NVIDIA NvDLISR;C:\\Windows\\system32;C:\\Windows;C:\\Windows\\System32\\Wbem;C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\;C:\\Windows\\System32\\OpenSSH\\;C:\\Program Files\\dotnet\\;C:\\Program Files\\nodejs\\;C:\\Program Files\\PowerShell\\7\\;C:\\Program Files\\PowerShell\\7-preview\\preview;C:\\Program Files\\Git\\cmd;C:\\Users\\zenis\\AppData\\Local\\Programs\\Python\\Python313\\Scripts\\;C:\\Users\\zenis\\AppData\\Local\\Programs\\Python\\Python313\\;C:\\Users\\zenis\\AppData\\Local\\Programs\\Python\\Launcher\\;C:\\Users\\zenis\\AppData\\Local\\Microsoft\\WindowsApps;C:\\Users\\zenis\\AppData\\Roaming\\npm;C:\\Users\\zenis\\AppData\\Local\\Programs\\Microsoft VS Code\\bin;C:\\Users\\zenis\\AppData\\Local\\Programs\\Antigravity\\bin;D:\\cursor\\resources\\app\\bin')
+[2026-02-20 00:26:45] [ERROR   ] vuln_scanner - Service detection skipped – nmap is not available
+[2026-02-20 00:26:45] [INFO    ] vuln_scanner - === Vulnerability detection engine started ===
+[2026-02-20 00:26:45] [INFO    ] vuln_scanner - Running rule-based vulnerability checks …
+[2026-02-20 00:26:45] [INFO    ] vuln_scanner - Rule-based scan complete – 1 issue(s)
+[2026-02-20 00:26:45] [ERROR   ] vuln_scanner - nmap binary not found – NSE scan skipped ('nmap program was not found in path. PATH is : C:\\Program Files\\PowerShell\\7;C:\\Windows\\system32;C:\\Windows;C:\\Windows\\System32\\Wbem;C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\;C:\\Windows\\System32\\OpenSSH\\;C:\\Program Files (x86)\\NVIDIA Corporation\\PhysX\\Common;C:\\Program Files\\NVIDIA Corporation\\NVIDIA NvDLISR;C:\\Windows\\system32;C:\\Windows;C:\\Windows\\System32\\Wbem;C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\;C:\\Windows\\System32\\OpenSSH\\;C:\\Program Files\\dotnet\\;C:\\Program Files\\nodejs\\;C:\\Program Files\\PowerShell\\7\\;C:\\Program Files\\PowerShell\\7-preview\\preview;C:\\Program Files\\Git\\cmd;C:\\Users\\zenis\\AppData\\Local\\Programs\\Python\\Python313\\Scripts\\;C:\\Users\\zenis\\AppData\\Local\\Programs\\Python\\Python313\\;C:\\Users\\zenis\\AppData\\Local\\Programs\\Python\\Launcher\\;C:\\Users\\zenis\\AppData\\Local\\Microsoft\\WindowsApps;C:\\Users\\zenis\\AppData\\Roaming\\npm;C:\\Users\\zenis\\AppData\\Local\\Programs\\Microsoft VS Code\\bin;C:\\Users\\zenis\\AppData\\Local\\Programs\\Antigravity\\bin;D:\\cursor\\resources\\app\\bin')
+[2026-02-20 00:26:45] [INFO    ] vuln_scanner - Running CVE correlation against 0 service(s)
+[2026-02-20 00:26:45] [INFO    ] vuln_scanner - CVE correlation complete – 0 match(es)
+[2026-02-20 00:26:45] [INFO    ] vuln_scanner - === Vulnerability detection complete – 1 unique finding(s) ===
+[2026-02-20 00:26:45] [INFO    ] vuln_scanner - TXT report saved: C:\Users\zenis\Desktop\k\vuln_scanner\reports\scan_127_0_0_1_20260220_002645.txt
+[2026-02-20 00:26:45] [INFO    ] vuln_scanner - JSON report saved: C:\Users\zenis\Desktop\k\vuln_scanner\reports\scan_127_0_0_1_20260220_002645.json
+[2026-02-20 00:26:45] [INFO    ] vuln_scanner - PDF report saved: C:\Users\zenis\Desktop\k\vuln_scanner\reports\scan_127_0_0_1_20260220_002645.pdf
+[2026-02-20 00:26:45] [INFO    ] vuln_scanner - Report generation duration: 0.03s
+[2026-02-20 00:26:45] [INFO    ] vuln_scanner - === Scan session finished – 127.0.0.1, 2 open ports, 1 vulns, risk=Low (1.5/10) in 40.08s ===

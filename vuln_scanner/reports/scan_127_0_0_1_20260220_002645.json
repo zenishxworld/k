@@ -1,0 +1,48 @@
+{
+  "scan_metadata": {
+    "target": "127.0.0.1",
+    "timestamp": "2026-02-20 00:26:45",
+    "duration": "40.05s",
+    "port_range": "1-500",
+    "phase_timings": {
+      "Host Discovery": "0.10s",
+      "Port Scanning": "5.38s",
+      "Service Detection": "0.00s",
+      "Vuln Detection": "0.01s",
+      "Total": "40.05s"
+    }
+  },
+  "host_discovery": {
+    "target": "127.0.0.1",
+    "alive": true
+  },
+  "port_scan": {
+    "total_scanned": 500,
+    "open_count": 2,
+    "open_ports": [
+      135,
+      445
+    ]
+  },
+  "services": {},
+  "vulnerabilities": [
+    {
+      "port": 445,
+      "service": "SMB",
+      "severity": "MEDIUM",
+      "title": "SMB Service Exposed",
+      "description": "SMB (port 445) is reachable. Historically targeted by worms (WannaCry, EternalBlue). Restrict access via firewall.",
+      "source": "rule-engine"
+    }
+  ],
+  "risk_assessment": {
+    "total": 1,
+    "critical": 0,
+    "high": 0,
+    "medium": 1,
+    "low": 0,
+    "info": 0,
+    "score": 1.5,
+    "rating": "Low"
+  }
+}
