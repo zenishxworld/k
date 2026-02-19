@@ -1,0 +1,5 @@
+python-nmap
+scapy
+reportlab
+requests
+colorama
