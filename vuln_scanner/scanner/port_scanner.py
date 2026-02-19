@@ -3,9 +3,11 @@ port_scanner.py - Multi-threaded TCP connect port scanner.
 
 Uses raw sockets (no external libraries) with ThreadPoolExecutor
 to rapidly scan a target for open TCP ports.
+Supports optional rate limiting to avoid triggering IDS/firewalls.
 """
 
 import socket
+import time
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Tuple
@@ -42,16 +44,25 @@ COMMON_PORTS = {
 
 
 class PortScanner:
-    """TCP connect-scan port scanner with multi-threading."""
+    """TCP connect-scan port scanner with multi-threading and rate limiting."""
 
-    def __init__(self, timeout: float = 1.0, max_threads: int = 100) -> None:
+    def __init__(
+        self,
+        timeout: float = 1.0,
+        max_threads: int = 100,
+        rate_limit: float = 0.0,
+    ) -> None:
         """
         Args:
             timeout:     Socket connection timeout in seconds.
-            max_threads: Maximum number of concurrent scanning threads (cap 100).
+            max_threads: Maximum concurrent scanning threads (hard cap 100).
+            rate_limit:  Delay in seconds between each batch of port probes.
+                         0 = no throttling (full speed).
+                         Useful to avoid IDS/firewall triggers.
         """
         self.timeout = timeout
         self.max_threads = min(max_threads, 100)  # hard cap at 100
+        self.rate_limit = max(0.0, rate_limit)
 
     # ------------------------------------------------------------------ #
     #  Single port probe
@@ -79,7 +90,7 @@ class PortScanner:
             return (port, False)
 
     # ------------------------------------------------------------------ #
-    #  Range scan
+    #  Range scan with optional rate limiting
     # ------------------------------------------------------------------ #
     def scan(
         self,
@@ -89,6 +100,10 @@ class PortScanner:
     ) -> List[int]:
         """
         Scan a range of TCP ports on *host* using a thread pool.
+
+        Ports are split into batches equal to ``max_threads``.  If
+        ``rate_limit > 0``, a delay is inserted between batches to
+        throttle the scan rate.
 
         Args:
             host:       Target IP / hostname.
@@ -107,31 +122,42 @@ class PortScanner:
 
         total = end_port - start_port + 1
         logger.info(
-            "Starting TCP connect scan on %s  ports %d–%d (%d ports, %d threads)",
-            host,
-            start_port,
-            end_port,
-            total,
-            self.max_threads,
+            "Starting TCP connect scan on %s  ports %d–%d "
+            "(%d ports, %d threads, rate_limit=%.2fs)",
+            host, start_port, end_port, total,
+            self.max_threads, self.rate_limit,
         )
+
+        all_ports = list(range(start_port, end_port + 1))
+        # Split into batches for rate-limited execution
+        batch_size = self.max_threads
+        batches = [
+            all_ports[i : i + batch_size]
+            for i in range(0, len(all_ports), batch_size)
+        ]
 
         open_ports: List[int] = []
 
-        with ThreadPoolExecutor(max_workers=self.max_threads) as executor:
-            futures = {
-                executor.submit(self._scan_port, host, port): port
-                for port in range(start_port, end_port + 1)
-            }
-            for future in as_completed(futures):
-                port_num = futures[future]
-                try:
-                    port, is_open = future.result()
-                    if is_open:
-                        service = COMMON_PORTS.get(port, "unknown")
-                        logger.info("  ✔ Port %d/tcp OPEN  (%s)", port, service)
-                        open_ports.append(port)
-                except Exception as exc:
-                    logger.error("Error scanning port %d: %s", port_num, exc)
+        for batch_idx, batch in enumerate(batches):
+            # Rate-limit delay between batches (skip first batch)
+            if self.rate_limit > 0 and batch_idx > 0:
+                time.sleep(self.rate_limit)
+
+            with ThreadPoolExecutor(max_workers=self.max_threads) as executor:
+                futures = {
+                    executor.submit(self._scan_port, host, port): port
+                    for port in batch
+                }
+                for future in as_completed(futures):
+                    port_num = futures[future]
+                    try:
+                        port, is_open = future.result()
+                        if is_open:
+                            service = COMMON_PORTS.get(port, "unknown")
+                            logger.info("  ✔ Port %d/tcp OPEN  (%s)", port, service)
+                            open_ports.append(port)
+                    except Exception as exc:
+                        logger.error("Error scanning port %d: %s", port_num, exc)
 
         open_ports.sort()
         logger.info(

@@ -1,12 +1,14 @@
 """
-main.py - Entry point for the Vulnerability Scanner CLI.
+main.py - Entry point for the Vulnerability Scanner CLI  v3.0
 
-Orchestrates host discovery, port scanning, and service detection
-with a professional coloured terminal interface.
+Orchestrates host discovery, port scanning, service detection,
+vulnerability analysis, and multi-format report generation with
+a professional coloured terminal interface.
 """
 
 import sys
 import re
+import os
 import time
 import ipaddress
 from datetime import datetime
@@ -20,6 +22,12 @@ from scanner.host_discovery import HostDiscovery
 from scanner.port_scanner import PortScanner, COMMON_PORTS
 from scanner.service_detection import ServiceDetector
 from scanner.vuln_detection import VulnerabilityDetector
+from report_generator import (
+    ScanReport,
+    generate_txt_report,
+    generate_json_report,
+    generate_pdf_report,
+)
 
 # ── Initialise colorama (required on Windows) ──────────────────────────
 colorama_init(autoreset=True)
@@ -38,15 +46,31 @@ BANNER = rf"""
    ╚═══╝   ╚═════╝ ╚══════╝╚═╝  ╚═══╝    ╚══════╝ ╚═════╝╚═╝  ╚═╝╚═╝  ╚═══╝
 {Style.RESET_ALL}
 {Fore.WHITE}  ─────────────────────────────────────────────────────────────────────
-{Fore.YELLOW}   Professional Modular Vulnerability Scanner  v2.0
+{Fore.YELLOW}   Professional Modular Vulnerability Scanner  v3.0
 {Fore.WHITE}  ─────────────────────────────────────────────────────────────────────
 """
 
 DIVIDER = f"{Fore.WHITE}  {'─' * 65}"
 
+RATING_COLORS = {
+    "Critical": Fore.RED + Style.BRIGHT,
+    "High": Fore.RED,
+    "Medium": Fore.YELLOW,
+    "Low": Fore.CYAN,
+    "Clean": Fore.GREEN + Style.BRIGHT,
+}
+
+SEVERITY_COLORS = {
+    "CRITICAL": Fore.RED + Style.BRIGHT,
+    "HIGH": Fore.RED,
+    "MEDIUM": Fore.YELLOW,
+    "LOW": Fore.CYAN,
+    "INFO": Fore.WHITE,
+}
+
 
 # ══════════════════════════════════════════════════════════════════════ #
-#  Helper utilities
+#  Input validation
 # ══════════════════════════════════════════════════════════════════════ #
 def validate_ip(ip: str) -> bool:
     """Return True if *ip* is a valid IPv4 or IPv6 address."""
@@ -58,36 +82,47 @@ def validate_ip(ip: str) -> bool:
 
 
 def validate_target(target: str) -> bool:
-    """
-    Accept an IPv4/IPv6 address **or** a hostname (basic regex check).
-    """
+    """Accept an IPv4/IPv6 address **or** a hostname (RFC 1123)."""
     if validate_ip(target):
         return True
-    # Simple hostname validation (RFC 1123)
     hostname_re = re.compile(
         r"^(?!-)[A-Za-z0-9-]{1,63}(?<!-)(\.[A-Za-z0-9-]{1,63})*$"
     )
     return hostname_re.match(target) is not None
 
 
+# ══════════════════════════════════════════════════════════════════════ #
+#  User prompts
+# ══════════════════════════════════════════════════════════════════════ #
 def get_port_range() -> tuple:
-    """Prompt the user for a port range and return (start, end)."""
+    """Prompt for port range; return (start, end)."""
     print(f"\n{Fore.CYAN}  [?] Enter port range to scan")
     start = input(f"{Fore.WHITE}      Start port (default 1): {Fore.GREEN}").strip()
     end = input(f"{Fore.WHITE}      End port   (default 1024): {Fore.GREEN}").strip()
-
     start_port = int(start) if start.isdigit() else 1
     end_port = int(end) if end.isdigit() else 1024
-
     start_port = max(1, min(start_port, 65535))
     end_port = max(1, min(end_port, 65535))
-
     if start_port > end_port:
         start_port, end_port = end_port, start_port
-
     return start_port, end_port
 
 
+def get_rate_limit() -> float:
+    """Prompt for optional rate-limit delay between batches."""
+    val = input(
+        f"{Fore.WHITE}      Rate limit delay between batches in seconds "
+        f"(default 0 = off): {Fore.GREEN}"
+    ).strip()
+    try:
+        return max(0.0, float(val)) if val else 0.0
+    except ValueError:
+        return 0.0
+
+
+# ══════════════════════════════════════════════════════════════════════ #
+#  Timing helper
+# ══════════════════════════════════════════════════════════════════════ #
 def elapsed(start: float) -> str:
     """Return a human-friendly elapsed-time string."""
     secs = time.time() - start
@@ -96,6 +131,11 @@ def elapsed(start: float) -> str:
     mins = int(secs // 60)
     remaining = secs % 60
     return f"{mins}m {remaining:.1f}s"
+
+
+def elapsed_raw(start: float) -> float:
+    """Return raw seconds since *start*."""
+    return round(time.time() - start, 3)
 
 
 # ══════════════════════════════════════════════════════════════════════ #
@@ -121,7 +161,7 @@ def print_open_ports(ports: list) -> None:
 
 
 def print_services(services: dict) -> None:
-    """Display nmap service detection results."""
+    """Display service detection results."""
     print(
         f"\n{Fore.GREEN}{Style.BRIGHT}"
         f"  {'PORT':<8} {'STATE':<8} {'SERVICE':<12} {'PRODUCT':<22} {'VERSION'}"
@@ -137,24 +177,15 @@ def print_services(services: dict) -> None:
         )
 
 
-SEVERITY_COLORS = {
-    "CRITICAL": Fore.RED + Style.BRIGHT,
-    "HIGH": Fore.RED,
-    "MEDIUM": Fore.YELLOW,
-    "LOW": Fore.CYAN,
-    "INFO": Fore.WHITE,
-}
-
-
 def print_vulns(vulns: list) -> None:
-    """Display discovered vulnerabilities in a formatted table."""
+    """Display vulnerabilities with table + detail tree."""
     print(
         f"\n{Fore.RED}{Style.BRIGHT}"
         f"  {'SEV':<10} {'PORT':<8} {'TITLE':<42} {'SOURCE'}"
     )
     print(f"  {'─'*10} {'─'*8} {'─'*42} {'─'*16}")
     for v in vulns:
-        sev = v['severity'].upper()
+        sev = v["severity"].upper()
         color = SEVERITY_COLORS.get(sev, Fore.WHITE)
         print(
             f"  {color}{sev:<10} "
@@ -162,44 +193,77 @@ def print_vulns(vulns: list) -> None:
             f"{Fore.YELLOW}{v['title'][:40]:<42} "
             f"{Fore.MAGENTA}{v['source']}"
         )
-    # Detail lines
+    # Detail tree
     print(f"\n{Fore.WHITE}  ┌─ Vulnerability Details")
-    for i, v in enumerate(vulns, 1):
-        sev = v['severity'].upper()
+    for v in vulns:
+        sev = v["severity"].upper()
         color = SEVERITY_COLORS.get(sev, Fore.WHITE)
         print(f"{Fore.WHITE}  │")
         print(f"{Fore.WHITE}  ├─ [{color}{sev}{Fore.WHITE}] {Fore.YELLOW}{v['title']}")
-        print(f"{Fore.WHITE}  │   Port {v['port']} · {v['service']} · Source: {v['source']}")
-        desc_lines = v['description'][:160]
-        print(f"{Fore.WHITE}  │   {Fore.CYAN}{desc_lines}")
+        print(
+            f"{Fore.WHITE}  │   Port {v['port']} · {v['service']} · Source: {v['source']}"
+        )
+        print(f"{Fore.WHITE}  │   {Fore.CYAN}{v['description'][:160]}")
     print(f"{Fore.WHITE}  └{'─'*64}")
 
 
 def print_risk_score(risk: dict) -> None:
     """Display the aggregate risk score panel."""
-    # Color the rating
-    rating_colors = {
-        "Critical": Fore.RED + Style.BRIGHT,
-        "High": Fore.RED,
-        "Medium": Fore.YELLOW,
-        "Low": Fore.CYAN,
-        "Clean": Fore.GREEN + Style.BRIGHT,
-    }
-    rc = rating_colors.get(risk['rating'], Fore.WHITE)
+    rc = RATING_COLORS.get(risk["rating"], Fore.WHITE)
 
     print(f"\n{Fore.WHITE}  ┌{'─'*44}┐")
-    print(f"{Fore.WHITE}  │{Fore.RED}{Style.BRIGHT}  ⚠  RISK ASSESSMENT{' '*24}{Fore.WHITE}│")
+    print(
+        f"{Fore.WHITE}  │{Fore.RED}{Style.BRIGHT}"
+        f"  ⚠  RISK ASSESSMENT{' '*24}{Fore.WHITE}│"
+    )
     print(f"{Fore.WHITE}  ├{'─'*44}┤")
-    print(f"{Fore.WHITE}  │  Overall Score : {rc}{risk['score']}/10{Style.RESET_ALL}{' '*(22 - len(str(risk['score'])))}│")
-    print(f"{Fore.WHITE}  │  Rating        : {rc}{risk['rating']}{Style.RESET_ALL}{' '*(24 - len(risk['rating']))}│")
-    print(f"{Fore.WHITE}  │  Total Findings: {Fore.YELLOW}{risk['total']}{Style.RESET_ALL}{' '*(24 - len(str(risk['total'])))}│")
+    print(
+        f"{Fore.WHITE}  │  Overall Score : {rc}{risk['score']}/10"
+        f"{Style.RESET_ALL}{' '*(22 - len(str(risk['score'])))}│"
+    )
+    print(
+        f"{Fore.WHITE}  │  Rating        : {rc}{risk['rating']}"
+        f"{Style.RESET_ALL}{' '*(24 - len(risk['rating']))}│"
+    )
+    print(
+        f"{Fore.WHITE}  │  Total Findings: {Fore.YELLOW}{risk['total']}"
+        f"{Style.RESET_ALL}{' '*(24 - len(str(risk['total'])))}│"
+    )
     print(f"{Fore.WHITE}  ├{'─'*44}┤")
-    print(f"{Fore.WHITE}  │  {Fore.RED}{Style.BRIGHT}CRITICAL : {risk['critical']}{Style.RESET_ALL}{' '*(31 - len(str(risk['critical'])))}│")
-    print(f"{Fore.WHITE}  │  {Fore.RED}HIGH     : {risk['high']}{Style.RESET_ALL}{' '*(31 - len(str(risk['high'])))}│")
-    print(f"{Fore.WHITE}  │  {Fore.YELLOW}MEDIUM   : {risk['medium']}{Style.RESET_ALL}{' '*(31 - len(str(risk['medium'])))}│")
-    print(f"{Fore.WHITE}  │  {Fore.CYAN}LOW      : {risk['low']}{Style.RESET_ALL}{' '*(31 - len(str(risk['low'])))}│")
-    print(f"{Fore.WHITE}  │  {Fore.WHITE}INFO     : {risk['info']}{Style.RESET_ALL}{' '*(31 - len(str(risk['info'])))}│")
+    for label, key, color in [
+        ("CRITICAL", "critical", Fore.RED + Style.BRIGHT),
+        ("HIGH",     "high",     Fore.RED),
+        ("MEDIUM",   "medium",   Fore.YELLOW),
+        ("LOW",      "low",      Fore.CYAN),
+        ("INFO",     "info",     Fore.WHITE),
+    ]:
+        val = str(risk[key])
+        pad = 31 - len(val)
+        print(
+            f"{Fore.WHITE}  │  {color}{label:<9}: {val}"
+            f"{Style.RESET_ALL}{' '*pad}│"
+        )
     print(f"{Fore.WHITE}  └{'─'*44}┘")
+
+
+def print_phase_timings(timings: dict) -> None:
+    """Display phase-level timing breakdown."""
+    print(f"\n{Fore.WHITE}  ┌─ Phase Timings")
+    for phase, dur in timings.items():
+        print(f"{Fore.WHITE}  │  {Fore.CYAN}{phase:<30} {Fore.YELLOW}{dur}")
+    print(f"{Fore.WHITE}  └{'─'*44}")
+
+
+def print_report_paths(paths: dict) -> None:
+    """Display generated report file paths."""
+    print(f"\n{Fore.WHITE}  ┌─ Generated Reports")
+    for fmt, path in paths.items():
+        if path:
+            basename = os.path.basename(path)
+            print(f"{Fore.WHITE}  │  {Fore.CYAN}{fmt:<6} {Fore.GREEN}{basename}")
+        else:
+            print(f"{Fore.WHITE}  │  {Fore.CYAN}{fmt:<6} {Fore.RED}skipped")
+    print(f"{Fore.WHITE}  └{'─'*44}")
 
 
 # ══════════════════════════════════════════════════════════════════════ #
@@ -209,9 +273,10 @@ def main() -> None:
     print(BANNER)
 
     scan_start = time.time()
+    phase_timings: dict = {}
     logger.info("=== Scan session started ===")
 
-    # ── 1. Target input ────────────────────────────────────────────────
+    # ── 1. Target Input ───────────────────────────────────────────────
     target = input(
         f"{Fore.CYAN}  [?] Enter target IP or hostname: {Fore.GREEN}"
     ).strip()
@@ -229,12 +294,14 @@ def main() -> None:
     print(f"\n{Fore.WHITE}  [*] Target set → {Fore.GREEN}{Style.BRIGHT}{target}")
     logger.info("Target: %s", target)
 
-    # ── 2. Host Discovery ──────────────────────────────────────────────
-    print_section("HOST DISCOVERY")
+    # ── 2. Host Discovery ─────────────────────────────────────────────
+    print_section("PHASE 1 › HOST DISCOVERY")
     print(f"{Fore.WHITE}  [*] Pinging {target} …")
 
+    t0 = time.time()
     hd = HostDiscovery(timeout=2)
     host_alive = hd.ping_host(target)
+    phase_timings["Host Discovery"] = elapsed(t0)
 
     if host_alive:
         print(f"{Fore.GREEN}{Style.BRIGHT}  [✔] Host {target} is UP")
@@ -243,113 +310,247 @@ def main() -> None:
         print(f"{Fore.YELLOW}  [!] Proceeding with scan anyway …")
         logger.warning("Host %s appears down – continuing scan", target)
 
-    # ── 3. Port Scanning ──────────────────────────────────────────────
-    print_section("PORT SCANNING")
-    start_port, end_port = get_port_range()
-
     print(
-        f"{Fore.WHITE}  [*] Scanning ports {Fore.YELLOW}{start_port}–{end_port}"
-        f"{Fore.WHITE} on {Fore.GREEN}{target}{Fore.WHITE} …\n"
+        f"{Fore.WHITE}  [⏱] Host discovery completed in "
+        f"{Fore.YELLOW}{phase_timings['Host Discovery']}"
     )
 
-    ps = PortScanner(timeout=1.0, max_threads=100)
-    port_start_time = time.time()
+    # ── 3. Port Scanning ──────────────────────────────────────────────
+    print_section("PHASE 2 › PORT SCANNING")
+    start_port, end_port = get_port_range()
+    rate_limit = get_rate_limit()
+
+    total_ports = end_port - start_port + 1
+    print(
+        f"\n{Fore.WHITE}  [*] Scanning {Fore.YELLOW}{total_ports}"
+        f"{Fore.WHITE} ports ({start_port}–{end_port}) on "
+        f"{Fore.GREEN}{target}{Fore.WHITE} …"
+    )
+    if rate_limit > 0:
+        print(
+            f"{Fore.WHITE}  [*] Rate limit: {Fore.YELLOW}{rate_limit}s"
+            f"{Fore.WHITE} delay between batches"
+        )
+    print()
+
+    t0 = time.time()
+    ps = PortScanner(timeout=1.0, max_threads=100, rate_limit=rate_limit)
     open_ports = ps.scan(target, start_port, end_port)
-    port_elapsed = elapsed(port_start_time)
+    phase_timings["Port Scanning"] = elapsed(t0)
 
     if open_ports:
         print_open_ports(open_ports)
         print(
             f"\n{Fore.WHITE}  [*] {Fore.GREEN}{len(open_ports)} open port(s)"
-            f"{Fore.WHITE} found in {Fore.YELLOW}{port_elapsed}"
+            f"{Fore.WHITE} found in {Fore.YELLOW}{phase_timings['Port Scanning']}"
         )
     else:
-        print(f"{Fore.RED}  [!] No open ports found in range {start_port}–{end_port}")
+        print(
+            f"{Fore.RED}  [!] No open ports found in range {start_port}–{end_port}"
+        )
+
+    logger.info(
+        "Port scan duration: %s – %d open ports",
+        phase_timings["Port Scanning"],
+        len(open_ports),
+    )
 
     # ── 4. Service Detection ──────────────────────────────────────────
-    services = {}
+    services: dict = {}
     if open_ports:
-        print_section("SERVICE DETECTION (nmap -sV)")
-        print(f"{Fore.WHITE}  [*] Identifying services on {len(open_ports)} port(s) …\n")
+        print_section("PHASE 3 › SERVICE DETECTION (nmap -sV)")
+        print(
+            f"{Fore.WHITE}  [*] Identifying services on "
+            f"{len(open_ports)} port(s) …\n"
+        )
 
+        t0 = time.time()
         sd = ServiceDetector()
-        svc_start_time = time.time()
         services = sd.detect_services(target, open_ports)
-        svc_elapsed = elapsed(svc_start_time)
+        phase_timings["Service Detection"] = elapsed(t0)
 
         if services:
             print_services(services)
-            print(
-                f"\n{Fore.WHITE}  [*] Service detection completed in"
-                f" {Fore.YELLOW}{svc_elapsed}"
-            )
         else:
             print(
                 f"{Fore.YELLOW}  [!] Service detection returned no results."
                 f"  (Is nmap installed?)"
             )
+        print(
+            f"\n{Fore.WHITE}  [⏱] Service detection completed in "
+            f"{Fore.YELLOW}{phase_timings['Service Detection']}"
+        )
+    else:
+        phase_timings["Service Detection"] = "skipped"
 
     # ── 5. Vulnerability Detection ────────────────────────────────────
-    vulns = []
-    risk = {"total": 0, "critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0, "score": 0, "rating": "Clean"}
+    vulns: list = []
+    risk = {
+        "total": 0, "critical": 0, "high": 0,
+        "medium": 0, "low": 0, "info": 0,
+        "score": 0, "rating": "Clean",
+    }
     if open_ports:
-        print_section("VULNERABILITY DETECTION")
+        print_section("PHASE 4 › VULNERABILITY DETECTION")
         print(f"{Fore.WHITE}  [*] Running vulnerability engine …\n")
 
+        t0 = time.time()
         vd = VulnerabilityDetector()
-        vuln_start_time = time.time()
         vulns = vd.run_all(target, open_ports, services)
-        vuln_elapsed = elapsed(vuln_start_time)
+        phase_timings["Vuln Detection"] = elapsed(t0)
 
         if vulns:
             print_vulns(vulns)
         else:
             print(f"{Fore.GREEN}{Style.BRIGHT}  [✔] No vulnerabilities detected")
 
-        # Risk score
         risk = VulnerabilityDetector.compute_risk_score(vulns)
         print_risk_score(risk)
 
         print(
-            f"\n{Fore.WHITE}  [*] Vulnerability scan completed in"
-            f" {Fore.YELLOW}{vuln_elapsed}"
+            f"\n{Fore.WHITE}  [⏱] Vulnerability scan completed in "
+            f"{Fore.YELLOW}{phase_timings['Vuln Detection']}"
         )
+    else:
+        phase_timings["Vuln Detection"] = "skipped"
 
-    # ── 6. Summary ────────────────────────────────────────────────────
+    # ── 6. Report Generation ──────────────────────────────────────────
     total_elapsed = elapsed(scan_start)
-    print_section("SCAN SUMMARY")
-    print(f"{Fore.WHITE}  Target         : {Fore.GREEN}{target}")
-    print(f"{Fore.WHITE}  Host status    : {Fore.GREEN if host_alive else Fore.RED}{'UP' if host_alive else 'DOWN'}")
-    print(f"{Fore.WHITE}  Ports scanned  : {Fore.YELLOW}{start_port}–{end_port}")
-    print(f"{Fore.WHITE}  Open ports     : {Fore.GREEN}{len(open_ports)}")
-    print(f"{Fore.WHITE}  Vulnerabilities: {Fore.RED if risk['total'] > 0 else Fore.GREEN}{risk['total']}")
+    phase_timings["Total"] = total_elapsed
 
-    if risk['total'] > 0:
-        rating_colors = {
-            "Critical": Fore.RED + Style.BRIGHT,
-            "High": Fore.RED,
-            "Medium": Fore.YELLOW,
-            "Low": Fore.CYAN,
-            "Clean": Fore.GREEN + Style.BRIGHT,
-        }
-        rc = rating_colors.get(risk['rating'], Fore.WHITE)
-        print(f"{Fore.WHITE}  Risk rating    : {rc}{risk['rating']} ({risk['score']}/10){Style.RESET_ALL}")
+    print_section("PHASE 5 › REPORT GENERATION")
+    print(f"{Fore.WHITE}  [*] Generating reports …\n")
+
+    t0 = time.time()
+    scan_report = ScanReport(
+        target=target,
+        host_alive=host_alive,
+        start_port=start_port,
+        end_port=end_port,
+        open_ports=open_ports,
+        services=services,
+        vulnerabilities=vulns,
+        risk=risk,
+        scan_duration=total_elapsed,
+        phase_timings=phase_timings,
+    )
+
+    report_paths = {}
+
+    # TXT
+    try:
+        report_paths["TXT"] = generate_txt_report(scan_report)
+        print(
+            f"  {Fore.GREEN}  [✔] TXT  → {Fore.WHITE}"
+            f"{os.path.basename(report_paths['TXT'])}"
+        )
+    except Exception as exc:
+        report_paths["TXT"] = None
+        logger.error("TXT report failed: %s", exc)
+        print(f"  {Fore.RED}  [✘] TXT report failed: {exc}")
+
+    # JSON
+    try:
+        report_paths["JSON"] = generate_json_report(scan_report)
+        print(
+            f"  {Fore.GREEN}  [✔] JSON → {Fore.WHITE}"
+            f"{os.path.basename(report_paths['JSON'])}"
+        )
+    except Exception as exc:
+        report_paths["JSON"] = None
+        logger.error("JSON report failed: %s", exc)
+        print(f"  {Fore.RED}  [✘] JSON report failed: {exc}")
+
+    # PDF
+    try:
+        pdf_path = generate_pdf_report(scan_report)
+        report_paths["PDF"] = pdf_path
+        if pdf_path:
+            print(
+                f"  {Fore.GREEN}  [✔] PDF  → {Fore.WHITE}"
+                f"{os.path.basename(pdf_path)}"
+            )
+        else:
+            print(
+                f"  {Fore.YELLOW}  [!] PDF  → skipped (reportlab not installed)"
+            )
+    except Exception as exc:
+        report_paths["PDF"] = None
+        logger.error("PDF report failed: %s", exc)
+        print(f"  {Fore.RED}  [✘] PDF report failed: {exc}")
+
+    phase_timings["Report Generation"] = elapsed(t0)
+    logger.info("Report generation duration: %s", phase_timings["Report Generation"])
+
+    # ── 7. Final Summary ──────────────────────────────────────────────
+    # Recalculate total after reports
+    total_elapsed = elapsed(scan_start)
+    phase_timings["Total"] = total_elapsed
+
+    print_section("SCAN SUMMARY")
+
+    # Main stats
+    print(f"{Fore.WHITE}  Target         : {Fore.GREEN}{Style.BRIGHT}{target}")
+    print(
+        f"{Fore.WHITE}  Host status    : "
+        f"{Fore.GREEN if host_alive else Fore.RED}"
+        f"{'UP' if host_alive else 'DOWN'}"
+    )
+    print(f"{Fore.WHITE}  Port range     : {Fore.YELLOW}{start_port}–{end_port}")
+    print(f"{Fore.WHITE}  Total scanned  : {Fore.YELLOW}{total_ports}")
+    print(f"{Fore.WHITE}  Open ports     : {Fore.GREEN}{len(open_ports)}")
+    print(
+        f"{Fore.WHITE}  Vulnerabilities: "
+        f"{Fore.RED if risk['total'] > 0 else Fore.GREEN}{risk['total']}"
+    )
+
+    if risk["total"] > 0:
+        rc = RATING_COLORS.get(risk["rating"], Fore.WHITE)
+        print(
+            f"{Fore.WHITE}  Risk rating    : "
+            f"{rc}{risk['rating']} ({risk['score']}/10){Style.RESET_ALL}"
+        )
+        # Severity breakdown inline
+        sev_parts = []
+        for label, key, color in [
+            ("C", "critical", Fore.RED + Style.BRIGHT),
+            ("H", "high", Fore.RED),
+            ("M", "medium", Fore.YELLOW),
+            ("L", "low", Fore.CYAN),
+        ]:
+            if risk[key] > 0:
+                sev_parts.append(f"{color}{risk[key]}{label}{Style.RESET_ALL}")
+        if sev_parts:
+            print(
+                f"{Fore.WHITE}  Risk breakdown : "
+                + f"{Fore.WHITE} / ".join(sev_parts)
+            )
 
     print(f"{Fore.WHITE}  Total time     : {Fore.YELLOW}{total_elapsed}")
+
+    # Phase timings
+    print_phase_timings(phase_timings)
+
+    # Report paths
+    print_report_paths(report_paths)
+
     print(DIVIDER)
 
     logger.info(
-        "=== Scan session finished – %s, %d open ports, %d vulns, risk=%s in %s ===",
+        "=== Scan session finished – %s, %d open ports, %d vulns, "
+        "risk=%s (%s/10) in %s ===",
         target,
         len(open_ports),
-        risk['total'],
-        risk['rating'],
+        risk["total"],
+        risk["rating"],
+        risk["score"],
         total_elapsed,
     )
 
     print(
         f"\n{Fore.CYAN}  [✔] Scan complete. "
-        f"Logs saved to {Fore.YELLOW}logs/{Style.RESET_ALL}\n"
+        f"Logs → {Fore.YELLOW}logs/{Fore.CYAN}  "
+        f"Reports → {Fore.YELLOW}reports/{Style.RESET_ALL}\n"
     )
 
 
